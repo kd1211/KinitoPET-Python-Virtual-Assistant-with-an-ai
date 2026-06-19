@@ -116,6 +116,9 @@ class FloatingAssistant:
         self.mouse_click_offset_y = 0
         self.setup_mouse_bindings()
 
+        # track current question separately so handle_response can work even if bubble was destroyed
+        self.current_question = ""
+
     def ask_waht_todo(self, event=None):
         self.speak("What would you like me to do?", 45, True)
 
@@ -189,9 +192,11 @@ class FloatingAssistant:
             self.root.after(0, lambda: self.show_speech_bubble(text))
 
     def show_speech_bubble(self, text, evergoaway=True):
+        # Close existing bubble if present
         if hasattr(self, 'speech_bubble') and self.speech_bubble.winfo_exists():
             self.close_speech_bubble()
 
+        self.current_question = text
         self.play_mp3(starttalk_file_path)
         self.speech_bubble = Toplevel(self.root)
         self.speech_bubble.overrideredirect(True)
@@ -211,6 +216,7 @@ class FloatingAssistant:
             self.show_response_buttons(["Good", "Bad"])
 
         if evergoaway:
+            # schedule to close the bubble after 5 seconds
             self.root.after(5000, self.close_speech_bubble)
 
     def show_response_buttons(self, options):
@@ -218,7 +224,10 @@ class FloatingAssistant:
             button_frame = tk.Frame(self.speech_bubble, bg='white')
             button_frame.pack()
             for option in options:
-                option_button = tk.Button(button_frame, text=option, command=lambda response=option: self.handle_response(response))
+                # use a small wrapper to avoid late binding issues
+                def make_cmd(resp):
+                    return lambda: self.handle_response(resp)
+                option_button = tk.Button(button_frame, text=option, command=make_cmd(option))
                 option_button.pack(side=tk.LEFT, padx=5)
 
     def show_response_textbox(self, prompt):
@@ -241,7 +250,19 @@ class FloatingAssistant:
             entry.bind('<Return>', lambda event: self.handle_response(entry.get()))
 
     def handle_response(self, response):
-        current_question = self.speech_bubble.wm_title()
+        # Safely determine the current question
+        if hasattr(self, 'speech_bubble') and getattr(self, 'speech_bubble') is not None:
+            try:
+                if self.speech_bubble.winfo_exists():
+                    current_question = self.speech_bubble.wm_title()
+                else:
+                    current_question = self.current_question
+            except Exception:
+                current_question = self.current_question
+        else:
+            current_question = self.current_question
+
+        # Handle the user's response here
         if "What would you like me to do?" in current_question:
             if response == "Set a Reminder":
                 self.speak("How many minutes until I should remind you?", 45, True)
@@ -266,27 +287,34 @@ class FloatingAssistant:
                 self.speak("That's great, having a friend around is always a good time!")
             elif response == "Bad":
                 self.speak("Thats too bad, I hope I can cheer you up!")
+        # Close the bubble after handling the response
         self.close_speech_bubble()
 
     def close_speech_bubble(self):
-        if hasattr(self, 'speech_bubble') and self.speech_bubble.winfo_exists():
+        if hasattr(self, 'speech_bubble') and self.speech_bubble is not None:
             try:
-                self.speech_bubble.destroy()
+                if self.speech_bubble.winfo_exists():
+                    self.speech_bubble.destroy()
             except Exception:
                 pass
-            self.play_mp3(stoptalk_file_path)
-            self.talking = False
+        # keep the current_question string for potential handling
+        self.play_mp3(stoptalk_file_path)
+        self.talking = False
 
     def update_speech_bubble_position(self):
         while True:
-            if hasattr(self, 'speech_bubble'):
+            if hasattr(self, 'speech_bubble') and getattr(self, 'speech_bubble') is not None:
                 try:
                     if self.speech_bubble.winfo_exists():
                         bubble_x = self.root.winfo_x() + 50
                         bubble_y = self.root.winfo_y() - 30
                         self.speech_bubble.geometry(f"+{bubble_x}+{bubble_y}")
                     else:
-                        delattr(self, 'speech_bubble')
+                        # If the bubble was destroyed, set to None but keep current_question
+                        try:
+                            del self.speech_bubble
+                        except Exception:
+                            self.speech_bubble = None
                 except Exception:
                     pass
             time.sleep(0.1)
@@ -483,7 +511,8 @@ class FloatingAssistant:
             pass
 
     def play_mp3(self, file_path):
-        # Try pygame if available, otherwise use the OS default player
+        # Try pygame if available, otherwise try playsound, then try Windows Media Player, then OS default
+        # 1) pygame (if installed)
         try:
             import pygame
             pygame.mixer.init()
@@ -493,7 +522,29 @@ class FloatingAssistant:
         except Exception:
             pass
 
-        # Fallback: open the file with the system default application
+        # 2) playsound (if installed)
+        try:
+            from playsound import playsound
+            # play in background thread so it doesn't block the UI
+            threading.Thread(target=lambda: playsound(file_path), daemon=True).start()
+            return
+        except Exception:
+            pass
+
+        # 3) On Windows try to use Windows Media Player directly to avoid opening VLC as default
+        if sys.platform.startswith("win"):
+            # Common path for Windows Media Player
+            program_files = os.environ.get('ProgramFiles', r"C:\Program Files")
+            wmplayer_path = os.path.join(program_files, "Windows Media Player", "wmplayer.exe")
+            try:
+                if os.path.exists(wmplayer_path):
+                    # Start minimized using cmd start /min
+                    subprocess.Popen(["cmd", "/c", "start", "/min", "", wmplayer_path, file_path])
+                    return
+            except Exception:
+                pass
+
+        # 4) Last resort: open with system default application (may open VLC if it's the default)
         try:
             if sys.platform.startswith("win"):
                 os.startfile(file_path)
@@ -501,6 +552,7 @@ class FloatingAssistant:
                 subprocess.Popen(["open", file_path])
             else:
                 subprocess.Popen(["xdg-open", file_path])
+            return
         except Exception:
             try:
                 fallback_speak("Unable to play audio file.")
