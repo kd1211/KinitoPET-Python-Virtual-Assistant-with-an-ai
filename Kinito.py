@@ -10,8 +10,8 @@ import time
 import math
 import pyautogui
 import subprocess
-# pygame removed from top-level imports to allow running without installing it
 from datetime import datetime
+import requests
 
 # Helper to support PyInstaller onefile bundles
 def resource_path(rel_path):
@@ -193,10 +193,16 @@ class FloatingAssistant:
 
     def show_speech_bubble(self, text, evergoaway=True):
         # Close existing bubble if present
-        if hasattr(self, 'speech_bubble') and self.speech_bubble.winfo_exists():
-            self.close_speech_bubble()
+        if hasattr(self, 'speech_bubble') and getattr(self, 'speech_bubble') is not None:
+            try:
+                if self.speech_bubble.winfo_exists():
+                    self.speech_bubble.destroy()
+            except Exception:
+                pass
 
+        # remember the current question even if the bubble is closed later
         self.current_question = text
+
         self.play_mp3(starttalk_file_path)
         self.speech_bubble = Toplevel(self.root)
         self.speech_bubble.overrideredirect(True)
@@ -209,29 +215,24 @@ class FloatingAssistant:
         label = tk.Label(self.speech_bubble, text=text, bg='light gray', fg='black')
         label.pack(ipadx=5, ipady=5)
 
-        # Provide some quick-response buttons depending on prompt
         if "What would you like me to do?" in text:
             self.show_response_buttons(["Set a Reminder", "Tell Me the Time", "Toggle Sleep", "Sing a Song", "Tell Me a Fun Fact", "Simon Says", "Ask AI"])
         elif "How is your day?" in text:
             self.show_response_buttons(["Good", "Bad"])
 
         if evergoaway:
-            # schedule to close the bubble after 5 seconds
             self.root.after(5000, self.close_speech_bubble)
 
     def show_response_buttons(self, options):
-        if hasattr(self, 'speech_bubble') and self.speech_bubble.winfo_exists():
+        if hasattr(self, 'speech_bubble') and getattr(self, 'speech_bubble') is not None and self.speech_bubble.winfo_exists():
             button_frame = tk.Frame(self.speech_bubble, bg='white')
             button_frame.pack()
             for option in options:
-                # use a small wrapper to avoid late binding issues
-                def make_cmd(resp):
-                    return lambda: self.handle_response(resp)
-                option_button = tk.Button(button_frame, text=option, command=make_cmd(option))
+                option_button = tk.Button(button_frame, text=option, command=lambda resp=option: self.handle_response(resp))
                 option_button.pack(side=tk.LEFT, padx=5)
 
     def show_response_textbox(self, prompt):
-        if hasattr(self, 'speech_bubble') and self.speech_bubble.winfo_exists():
+        if hasattr(self, 'speech_bubble') and getattr(self, 'speech_bubble') is not None and self.speech_bubble.winfo_exists():
             entry = tk.Entry(self.speech_bubble, bg='light gray', fg='black')
             entry.pack(ipadx=10, ipady=5)
             entry.bind('<Return>', lambda event: self.handle_response(entry.get()))
@@ -476,117 +477,3 @@ class FloatingAssistant:
                 time.sleep(1)
             elif self.paused and not self.talking:
                 self.change_sprite(self.tk_img_sleep)
-                time.sleep(1)
-                self.change_sprite(self.tk_img_sleep1)
-                time.sleep(1)
-                self.change_sprite(self.tk_img_sleep2)
-                time.sleep(1)
-                self.change_sprite(self.tk_img_sleep3)
-                time.sleep(1)
-            elif self.talking:
-                self.change_sprite(self.tk_img_thinking)
-                time.sleep(1)
-                self.change_sprite(self.tk_img_thinking2)
-                time.sleep(1)
-
-    def set_reminder(self, minutes):
-        digits = [char for char in str(minutes) if char.isdigit()]
-        if digits:
-            self.speak("Your reminder is set!")
-            time.sleep(int(''.join(digits)) * 60)
-            self.play_mp3(timer_file_path)
-            self.speak("Hello! Your timer is done!")
-        else:
-            self.speak("Uh oh, it seems you didn't type any numbers! Try again.")
-
-    def print_current_datetime(self):
-        current_datetime = datetime.now()
-        formatted_datetime = current_datetime.strftime("%H:%M")
-        self.speak(f"The time is {formatted_datetime}!")
-
-    def change_sprite(self, new_sprite):
-        try:
-            self.panel.config(image=new_sprite)
-        except Exception:
-            pass
-
-    def play_mp3(self, file_path):
-        # Try pygame if available, otherwise try playsound, then try Windows Media Player, then OS default
-        # 1) pygame (if installed)
-        try:
-            import pygame
-            pygame.mixer.init()
-            pygame.mixer.music.load(file_path)
-            pygame.mixer.music.play()
-            return
-        except Exception:
-            pass
-
-        # 2) playsound (if installed)
-        try:
-            from playsound import playsound
-            # play in background thread so it doesn't block the UI
-            threading.Thread(target=lambda: playsound(file_path), daemon=True).start()
-            return
-        except Exception:
-            pass
-
-        # 3) On Windows try to use Windows Media Player directly to avoid opening VLC as default
-        if sys.platform.startswith("win"):
-            # Common path for Windows Media Player
-            program_files = os.environ.get('ProgramFiles', r"C:\Program Files")
-            wmplayer_path = os.path.join(program_files, "Windows Media Player", "wmplayer.exe")
-            try:
-                if os.path.exists(wmplayer_path):
-                    # Start minimized using cmd start /min
-                    subprocess.Popen(["cmd", "/c", "start", "/min", "", wmplayer_path, file_path])
-                    return
-            except Exception:
-                pass
-
-        # 4) Last resort: open with system default application (may open VLC if it's the default)
-        try:
-            if sys.platform.startswith("win"):
-                os.startfile(file_path)
-            elif sys.platform == "darwin":
-                subprocess.Popen(["open", file_path])
-            else:
-                subprocess.Popen(["xdg-open", file_path])
-            return
-        except Exception:
-            try:
-                fallback_speak("Unable to play audio file.")
-            except Exception:
-                pass
-
-    # Minimal AI chat window (local echo AI). Replace with Ollama/OpenAI integration if desired.
-    def show_ai_chat_window(self):
-        win = Toplevel(self.root)
-        win.title("Ask Kinito (AI)")
-        win.geometry("400x200")
-        tk.Label(win, text="Ask me anything:").pack(pady=6)
-        entry = tk.Entry(win, width=60)
-        entry.pack(pady=6)
-        result = tk.Text(win, height=6, width=48)
-        result.pack(pady=6)
-
-        def submit():
-            prompt = entry.get().strip()
-            if not prompt:
-                return
-            # Simple local "AI" that echoes and adds a friendly reply.
-            reply = f"You asked: {prompt}\nI'm still learning — here's a helpful tip: try to be specific about what you want."
-            result.delete('1.0', tk.END)
-            result.insert(tk.END, reply)
-            self.speak(reply)
-
-        tk.Button(win, text="Send", command=submit).pack(pady=4)
-
-
-def main():
-    root = tk.Tk()
-    app = FloatingAssistant(root, sprite_path_moving)
-    root.mainloop()
-
-if __name__ == "__main__":
-    main()
