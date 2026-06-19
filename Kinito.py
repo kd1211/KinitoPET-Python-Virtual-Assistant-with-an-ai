@@ -1,4 +1,5 @@
 import os
+import sys
 import tkinter as tk
 from tkinter import Toplevel, messagebox
 import pyttsx3
@@ -11,13 +12,19 @@ import pyautogui
 import subprocess
 import pygame
 from datetime import datetime
-import requests
 
-# Get the script's directory
+# Helper to support PyInstaller onefile bundles
+def resource_path(rel_path):
+    """Return absolute path to resource, works for dev and for PyInstaller bundle."""
+    base = getattr(sys, '_MEIPASS', os.path.dirname(__file__))
+    return os.path.join(base, rel_path)
+
+# Get the script's directory and asset paths
 script_directory = os.path.dirname(os.path.realpath(__file__))
-assets_directory = os.path.join(script_directory, "GameAssets")
+assets_directory = resource_path(os.path.join("GameAssets"))
 programs_directory = os.path.join(assets_directory, "Programs")
 balconexe_directory = os.path.join(programs_directory, "balcon.exe")
+
 sprite_path_normal = os.path.join(assets_directory, "KinitoNormal.png")
 sprite_path_normal_2 = os.path.join(assets_directory, "KinitoNormal2.png")
 sprite_path_moving = os.path.join(assets_directory, "Kinito.png")
@@ -37,11 +44,10 @@ woosh_file_path = os.path.join(assets_directory, "Woosh.mp3")
 surf_file_path = os.path.join(assets_directory, "Surf.mp3")
 bomp_file_path = os.path.join(assets_directory, "Bomp.mp3")
 
-
 # Initialize Text-to-Speech engine
 engine = pyttsx3.init()
 
-# Simple helper: speak via pyttsx3 as a fallback (not used by default, the project uses balcon.exe)
+# Simple helper: speak via pyttsx3 as a fallback
 def fallback_speak(text):
     try:
         engine.say(text)
@@ -53,9 +59,12 @@ class FloatingAssistant:
     def __init__(self, root, image_path):
         self.root = root
         self.root.overrideredirect(True)  # Remove window decorations
-        self.root.attributes('-transparentcolor', 'white')  # Set transparent color
+        try:
+            self.root.attributes('-transparentcolor', 'white')  # Set transparent color
+        except Exception:
+            pass
 
-        # Load images from the GameAssets folder
+        # Load images from the GameAssets folder (fail fast if missing)
         self.img_normal = Image.open(sprite_path_normal)
         self.img_normal_2 = Image.open(sprite_path_normal_2)
         self.img_moving = Image.open(image_path)
@@ -65,6 +74,7 @@ class FloatingAssistant:
         self.img_sleep3 = Image.open(sprite_path_sleep3)
         self.img_thinking = Image.open(sprite_path_thinking)
         self.img_thinking2 = Image.open(sprite_path_thinking2)
+
         self.tk_img_normal = ImageTk.PhotoImage(self.img_normal)
         self.tk_img_normal_2 = ImageTk.PhotoImage(self.img_normal_2)
         self.tk_img_moving = ImageTk.PhotoImage(self.img_moving)
@@ -77,7 +87,7 @@ class FloatingAssistant:
         
         # Display image
         self.panel = tk.Label(self.root, bg='white')
-        self.panel.pack(side="top", fill="both", expand="yes")
+        self.panel.pack(side="top", fill="both", expand=True)
         self.change_sprite(self.tk_img_normal)
 
         # Make the window float
@@ -87,66 +97,52 @@ class FloatingAssistant:
         self.paused = False
         self.talking = False
         self.normalclosebubble = True
-        # Set the window to stay on top of all other windows
-        self.root.wm_attributes("-topmost", True)
+        try:
+            self.root.wm_attributes("-topmost", True)
+        except Exception:
+            pass
 
-        # Start the smooth movement
+        # Start background threads
         threading.Thread(target=self.smooth_movement, daemon=True).start()
-
-        # Start the idle animation
         threading.Thread(target=self.idle_animation, daemon=True).start()
-
-        # Start the speech bubble position update thread
         threading.Thread(target=self.update_speech_bubble_position, daemon=True).start()
 
-        # Bind right-click to pause/unpause
+        # Bind controls
         self.root.bind("<Button-3>", self.ask_waht_todo)
-        
+        self.root.bind('<Double-Button-1>', lambda e: self.show_ai_chat_window())
+
         self.is_dragging = False
         self.mouse_click_offset_x = 0
         self.mouse_click_offset_y = 0
-        # Ensure your initialization includes setting up the mouse event bindings
         self.setup_mouse_bindings()
 
-        # Bind double-click to open AI chat window
-        self.root.bind('<Double-Button-1>', lambda e: self.show_ai_chat_window())
-
     def ask_waht_todo(self, event=None):
-        # Open main question (added an Ask AI option)
         self.speak("What would you like me to do?", 45, True)
 
     def setup_mouse_bindings(self):
-        # This method needs to be connected to the actual GUI event handling system you're using.
-        # For example, in Tkinter you would bind mouse events to the window or canvas.
-        self.root.bind('<Button-1>', self.on_mouse_down)  # Left mouse button down
-        self.root.bind('<B1-Motion>', self.on_mouse_move)  # Left mouse button held and moved
-        self.root.bind('<ButtonRelease-1>', self.on_mouse_up)  # Left mouse button release
+        self.root.bind('<Button-1>', self.on_mouse_down)
+        self.root.bind('<B1-Motion>', self.on_mouse_move)
+        self.root.bind('<ButtonRelease-1>', self.on_mouse_up)
         self.x, self.y = self.root.winfo_x(), self.root.winfo_y()
 
     def on_mouse_down(self, event):
         self.is_dragging = True
         self.play_mp3(woosh_file_path)
-        # Get the root window's current position
-        self.root.update_idletasks()  # Ensure window position is up-to-date
+        self.root.update_idletasks()
         root_x = self.root.winfo_rootx()
         root_y = self.root.winfo_rooty()
-        # Calculate the offset from the window's top-left corner to the mouse
         self.mouse_click_offset_x = root_x - event.x_root
         self.mouse_click_offset_y = root_y - event.y_root
 
     def on_mouse_move(self, event):
         if self.is_dragging:
-            # Calculate the new position based on the mouse's position and the initial offsets
             new_x = event.x_root + self.mouse_click_offset_x
             new_y = event.y_root + self.mouse_click_offset_y
-            # Update the window position
             self.root.geometry(f"+{int(new_x)}+{int(new_y)}")
 
     def on_mouse_up(self, event):
-        # Called when the left mouse button is released
         self.is_dragging = False
         self.play_mp3(bomp_file_path)
-
 
     def toggle_pause(self):
         if self.paused:
@@ -167,121 +163,85 @@ class FloatingAssistant:
         threading.Thread(target=self.update_speech_bubble_position, daemon=True).start()
 
     def speak(self, text, pitch=45, slow=False):
-        # Ensure the path to balcon.exe is correct and escape any spaces in paths
         command = [balconexe_directory, "-n", "Eddie", "-t", text, "-p", str(pitch)]
-        self.talking = True;
-        # Execute the command
+        self.talking = True
         try:
             subprocess.run(command, check=True)
         except Exception:
-            # If balcon isn't available, fallback to pyttsx3 (if installed/configured)
             fallback_speak(text)
 
-        if slow == True:
+        if slow:
             self.root.after(0, lambda: self.show_speech_bubble(text, False))
         else:
             self.root.after(0, lambda: self.show_speech_bubble(text))
 
     def speak_whisper(self, text, pitch=45, slow=False):
-        # Ensure the path to balcon.exe is correct and escape any spaces in paths
         command = [balconexe_directory, "-n", "Female Whisper", "-t", text, "-p", str(pitch)]
-        self.talking = True;
-        # Execute the command
+        self.talking = True
         try:
             subprocess.run(command, check=True)
         except Exception:
             fallback_speak(text)
 
-        if slow == True:
+        if slow:
             self.root.after(0, lambda: self.show_speech_bubble(text, False))
         else:
             self.root.after(0, lambda: self.show_speech_bubble(text))
 
     def show_speech_bubble(self, text, evergoaway=True):
-        # Check if a speech bubble is already present and close it
         if hasattr(self, 'speech_bubble') and self.speech_bubble.winfo_exists():
             self.close_speech_bubble()
-            
+
         self.play_mp3(starttalk_file_path)
         self.speech_bubble = Toplevel(self.root)
         self.speech_bubble.overrideredirect(True)
-        self.speech_bubble.attributes('-transparentcolor', 'white')
+        try:
+            self.speech_bubble.attributes('-transparentcolor', 'white')
+        except Exception:
+            pass
 
-        # Set the title of the speech bubble to identify the current question
         self.speech_bubble.wm_title(text)
-
-        # Adjust the vertical position of the speech bubble
         label = tk.Label(self.speech_bubble, text=text, bg='light gray', fg='black')
         label.pack(ipadx=5, ipady=5)
 
-        # Check if the question requires user response with buttons
+        # Provide some quick-response buttons depending on prompt
         if "What would you like me to do?" in text:
             self.show_response_buttons(["Set a Reminder", "Tell Me the Time", "Toggle Sleep", "Sing a Song", "Tell Me a Fun Fact", "Simon Says", "Ask AI"])
         elif "How is your day?" in text:
             self.show_response_buttons(["Good", "Bad"])
-        elif "What's your favorite color?" in text:
-            self.show_response_textbox("What's your favorite color?")
-        elif "Do you like programming?" in text:
-            self.show_response_buttons(["Yes", "No"])
-        elif "Is there a specific hobby you enjoy?" in text:
-            self.show_response_textbox("Is there a specific hobby you enjoy?")
-        elif "How about we play a game" in text:
-            self.show_response_buttons(["Okay", "Not now"])
-        elif "Let me show you this cool image I have generated for you!" in text:
-            self.show_response_buttons(["Okay", "Not now"])
-        elif "What is your favorite food?" in text:
-            self.show_response_textbox("What is your favorite food?")
-        elif "Hey! do you want to hear a poem I made just for you?" in text:
-            self.show_response_buttons(["Yes", "No, Your poems suck."])
-        elif "Wanna hear a fun fact!?" in text:
-            self.show_response_buttons(["Sure", "Not now"])
-        elif "How many minutes until I should remind you?" in text:
-            self.show_response_textbox("How many minutes until I should remind you?")
-        elif "Sure! What would you like me to say?" in text:
-            self.show_response_textbox("Sure! What would you like me to say?")
 
-        # Close the speech bubble after 5 seconds (adjust as needed)
-        if evergoaway == True:
+        if evergoaway:
             self.root.after(5000, self.close_speech_bubble)
 
     def show_response_buttons(self, options):
         if hasattr(self, 'speech_bubble') and self.speech_bubble.winfo_exists():
             button_frame = tk.Frame(self.speech_bubble, bg='white')
             button_frame.pack()
-
             for option in options:
                 option_button = tk.Button(button_frame, text=option, command=lambda response=option: self.handle_response(response))
                 option_button.pack(side=tk.LEFT, padx=5)
 
     def show_response_textbox(self, prompt):
         if hasattr(self, 'speech_bubble') and self.speech_bubble.winfo_exists():
-            # Add a text box below the existing speech bubble's label
             entry = tk.Entry(self.speech_bubble, bg='light gray', fg='black')
             entry.pack(ipadx=10, ipady=5)
             entry.bind('<Return>', lambda event: self.handle_response(entry.get()))
         else:
-            # Create a new speech bubble with the prompt and a text box
             self.speech_bubble = Toplevel(self.root)
             self.speech_bubble.overrideredirect(True)
-            self.speech_bubble.attributes('-transparentcolor', 'white')
+            try:
+                self.speech_bubble.attributes('-transparentcolor', 'white')
+            except Exception:
+                pass
             self.speech_bubble.wm_title(prompt)
-
-            # Create a label for the prompt
             label = tk.Label(self.speech_bubble, text=prompt, bg='light gray', fg='black')
             label.pack(ipadx=10, ipady=5)
-
-            # Create a text box for user input
             entry = tk.Entry(self.speech_bubble, bg='light gray', fg='black')
             entry.pack(ipadx=10, ipady=5)
             entry.bind('<Return>', lambda event: self.handle_response(entry.get()))
 
-            # Close the speech bubble after a certain time (e.g., 30 seconds)
-            #self.root.after(30000, self.close_speech_bubble)
-
     def handle_response(self, response):
-        # Handle the user's response here
         current_question = self.speech_bubble.wm_title()
-        
         if "What would you like me to do?" in current_question:
             if response == "Set a Reminder":
                 self.speak("How many minutes until I should remind you?", 45, True)
@@ -296,7 +256,6 @@ class FloatingAssistant:
             elif response == "Tell Me the Time":
                 self.print_current_datetime()
             elif response == "Ask AI":
-                # Open AI chat input window
                 self.show_ai_chat_window()
         elif "How many minutes until I should remind you?" in current_question:
             self.set_reminder(f"{response}")
@@ -307,60 +266,14 @@ class FloatingAssistant:
                 self.speak("That's great, having a friend around is always a good time!")
             elif response == "Bad":
                 self.speak("Thats too bad, I hope I can cheer you up!")
-        elif "What's your favorite color?" in current_question:
-            self.speak(f"Nice choice! {response} is a wonderful color!")
-        elif "Do you like programming?" in current_question:
-            if response == "Yes":
-                self.speak("Programming is amazing! if it weren't for programming, I wouldn't be here!")
-            elif response == "No":
-                self.speak("Thats a shame. I love ones and zeros.")
-        elif "Is there a specific hobby you enjoy?" in current_question:
-            self.speak(f"I can see how {response} is fun!")
-        elif "Wanna hear a fun fact!?" in current_question:
-            if response == "Sure":
-                self.say_random_fact()
-            elif response == "Not now":
-                self.speak("Thats okay! Maybe later.")
-        elif "How about we play a game" in current_question:
-            if response == "Okay":
-                self.play_random_program()
-            elif response == "Not now":
-                self.speak("Sure, we can do something else.")
-        elif "Let me show you this cool image I have generated for you!" in current_question:
-            if response == "Okay":
-                self.show_image()
-            elif response == "Not now":
-                self.speak("I get it. You are to busy paying too much attention to something that's not important.", 20)
-                self.minimize_current_window()
-                self.minimize_current_window()
-                self.minimize_current_window()
-                self.minimize_current_window()
-                self.minimize_current_window()
-                self.minimize_current_window()
-                self.minimize_current_window()
-                self.minimize_current_window()
-        elif "What is your favorite food?" in current_question:
-            self.speak(f"I agree! {response} tastes amazing!")
-        elif "Hey! do you want to hear a poem I made just for you?" in current_question:
-            if response == "Yes":
-                self.say_random_poem()
-            elif response == "No, Your poems suck.":
-                self.speak("That's a shame. I took a lot of time to make it. maybe you're just paying too much attention to what you're doing.", 20)
-                self.minimize_current_window()
-                self.minimize_current_window()
-                self.minimize_current_window()
-                self.minimize_current_window()
-                self.minimize_current_window()
-                self.minimize_current_window()
-                self.minimize_current_window()
-                self.minimize_current_window()
-                
-        # Close the speech bubble after handling the response
         self.close_speech_bubble()
 
     def close_speech_bubble(self):
         if hasattr(self, 'speech_bubble') and self.speech_bubble.winfo_exists():
-            self.speech_bubble.destroy()
+            try:
+                self.speech_bubble.destroy()
+            except Exception:
+                pass
             self.play_mp3(stoptalk_file_path)
             self.talking = False
 
@@ -369,63 +282,242 @@ class FloatingAssistant:
             if hasattr(self, 'speech_bubble'):
                 try:
                     if self.speech_bubble.winfo_exists():
-                        # Position the speech bubble above the assistant
                         bubble_x = self.root.winfo_x() + 50
                         bubble_y = self.root.winfo_y() - 30
                         self.speech_bubble.geometry(f"+{bubble_x}+{bubble_y}")
                     else:
-                        # Speech bubble closed, remove the attribute
                         delattr(self, 'speech_bubble')
-                except tk.TclError:
-                    # Handle the case where the speech_bubble is already destroyed
+                except Exception:
                     pass
-            time.sleep(0.1)  # Adjust the sleep duration as needed
+            time.sleep(0.1)
 
     def play_random_program(self):
         # Try to get the desktop path for the current user
         desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
-
-        print(f"Desktop Path: {desktop_path}")
-
         try:
-            # Check if the desktop path exists and is a directory
             if os.path.exists(desktop_path) and os.path.isdir(desktop_path):
-                # Get a list of all files on the desktop
                 desktop_contents = os.listdir(desktop_path)
-                print(f"Desktop Contents: {desktop_contents}")
-
-                # Get a list of shortcut files on the desktop
-                shortcut_files = [file for file in desktop_contents if file.endswith(".lnk")]
-
+                shortcut_files = [f for f in desktop_contents if f.lower().endswith('.lnk')]
                 if shortcut_files:
-                    # Choose a random shortcut
                     selected_shortcut = random.choice(shortcut_files)
-
-                    # Open the selected shortcut without asking the user
                     os.startfile(os.path.join(desktop_path, selected_shortcut))
-                
                 else:
-                    # No shortcut files found on the desktop
                     self.speak("It seems there are no shortcuts on your desktop. Let's try something else.")
                     self.speak_random_question()
             else:
-                # Check if the OneDrive path exists and is a directory
                 onedrive_path = os.path.join(os.path.expanduser("~"), "OneDrive", "Desktop")
                 if os.path.exists(onedrive_path) and os.path.isdir(onedrive_path):
-                    # Get a list of all files in the OneDrive Desktop folder
                     onedrive_contents = os.listdir(onedrive_path)
-                    print(f"OneDrive Desktop Contents: {onedrive_contents}")
-
-                    # Get a list of shortcut files in the OneDrive Desktop folder
-                    onedrive_shortcuts = [file for file in onedrive_contents if file.endswith(".lnk")]
-
+                    onedrive_shortcuts = [f for f in onedrive_contents if f.lower().endswith('.lnk')]
                     if onedrive_shortcuts:
-                        # Choose a random shortcut from OneDrive Desktop
                         selected_shortcut = random.choice(onedrive_shortcuts)
-
-                        # Ask the user if they want to open the selected shortcut
                         os.startfile(os.path.join(onedrive_path, selected_shortcut))
-                        
                     else:
-                        # No shortcut files found in the OneDrive Desktop folder
-{
+                        self.speak("It seems there are no shortcuts in your OneDrive Desktop. Let's try something else.")
+                        self.speak_random_question()
+                else:
+                    self.speak("I couldn't find your desktop. Let's try something else.")
+                    self.speak_random_question()
+        except Exception:
+            self.speak("I couldn't access your desktop. Let's try something else.")
+            self.speak_random_question()
+
+    def minimize_current_window(self):
+        pyautogui.hotkey('winleft', 'down')
+
+    def show_image(self):
+        secret_images_folder = os.path.join(assets_directory, "SecretImages")
+        if os.path.exists(secret_images_folder) and os.path.isdir(secret_images_folder):
+            image_files = [file for file in os.listdir(secret_images_folder) if file.lower().endswith((".jpg", ".jpeg", ".png"))]
+            if image_files:
+                selected_image = random.choice(image_files)
+                image_path = os.path.join(secret_images_folder, selected_image)
+                self.show_image_window(image_path)
+            else:
+                self.speak("It seems there are no secret images to show you. Let's try something else.")
+                self.speak_random_question()
+        else:
+            self.speak("I couldn't find the secret images folder. Let's try something else.")
+            self.speak_random_question()
+
+    def show_image_window(self, image_path):
+        image_window = Toplevel(self.root)
+        image_window.title("Image.png From: KinitoPET")
+        image_window.geometry("800x600")
+        img = Image.open(image_path)
+        tk_img = ImageTk.PhotoImage(img)
+        label = tk.Label(image_window, image=tk_img)
+        label.image = tk_img
+        label.pack(fill="both", expand=True)
+        screen_width = image_window.winfo_screenwidth()
+        screen_height = image_window.winfo_screenheight()
+        x = (screen_width - 800) // 2
+        y = (screen_height - 600) // 2
+        image_window.geometry(f"800x600+{x}+{y}")
+        image_window.wait_window(image_window)
+        self.unfreeze_mouse()
+
+    def freeze_mouse(self):
+        self.root.bind("<Motion>", lambda event: "break")
+
+    def unfreeze_mouse(self):
+        self.root.unbind("<Motion>")
+
+    def speak_random_question(self):
+        questions = [
+            "How is your day?",
+            "What's your favorite color?",
+            "Do you like programming?",
+            "What is your favorite food?",
+            "Is there a specific hobby you enjoy?",
+            "How about we play a game!",
+            "Hey! do you want to hear a poem I made just for you?",
+            "Let me show you this cool image I have generated for you!",
+            "Wanna hear a fun fact!?"
+        ]
+        question = random.choice(questions)
+        if "What's your favorite color?" in question or "What is your favorite food?" in question or "Is there a specific hobby" in question:
+            self.speak(question, 45, True)
+        else:
+            self.speak(question)
+
+    def say_random_poem(self):
+        poems = [
+            "Roses are red, violets are blue, your virtual friend is here for you.",
+            "Digital winds whisper in code, bringing helpfulness down every road.",
+            "Tiny tunes hum, reminders ring, Kinito will help you do your thing."
+        ]
+        poem = random.choice(poems)
+        self.play_mp3(newbeginnings_file_path)
+        self.speak(poem)
+
+    def say_random_fact(self):
+        facts = [
+            "Bananas are botanically berries.",
+            "Honey can last for thousands of years.",
+            "Octopuses have three hearts."
+        ]
+        fact = random.choice(facts)
+        self.speak(fact)
+
+    def smooth_movement(self):
+        while True:
+            if not self.paused:
+                if random.random() < 0.5 and not self.talking:
+                    self.speak_random_question()
+                    time.sleep(random.randint(6, 15))
+                else:
+                    target_x = random.randint(100, 800)
+                    target_y = random.randint(100, 800)
+                    self.moving = True
+                    self.change_sprite(self.tk_img_moving)
+                    self.play_mp3(surf_file_path)
+                    self.move_towards(target_x, target_y, speed=5)
+                    self.moving = False
+                    self.change_sprite(self.tk_img_normal)
+                    time.sleep(random.randint(6, 15))
+            else:
+                time.sleep(0.5)
+
+    def move_towards(self, target_x, target_y, speed):
+        while True:
+            if not self.paused:
+                current_x, current_y = self.root.winfo_x(), self.root.winfo_y()
+                if current_x == target_x and current_y == target_y:
+                    break
+                dx = target_x - current_x
+                dy = target_y - current_y
+                distance = math.hypot(dx, dy)
+                self.change_sprite(self.tk_img_moving)
+                steps = min(speed, distance)
+                theta = math.atan2(dy, dx)
+                self.x = current_x + steps * math.cos(theta)
+                self.y = current_y + steps * math.sin(theta)
+                self.root.geometry(f"+{int(self.x)}+{int(self.y)}")
+                self.root.update()
+                time.sleep(0.015)
+            else:
+                break
+
+    def idle_animation(self):
+        while True:
+            if not self.paused and not self.talking:
+                self.change_sprite(self.tk_img_normal)
+                time.sleep(1)
+                self.change_sprite(self.tk_img_normal_2)
+                time.sleep(1)
+            elif self.paused and not self.talking:
+                self.change_sprite(self.tk_img_sleep)
+                time.sleep(1)
+                self.change_sprite(self.tk_img_sleep1)
+                time.sleep(1)
+                self.change_sprite(self.tk_img_sleep2)
+                time.sleep(1)
+                self.change_sprite(self.tk_img_sleep3)
+                time.sleep(1)
+            elif self.talking:
+                self.change_sprite(self.tk_img_thinking)
+                time.sleep(1)
+                self.change_sprite(self.tk_img_thinking2)
+                time.sleep(1)
+
+    def set_reminder(self, minutes):
+        digits = [char for char in str(minutes) if char.isdigit()]
+        if digits:
+            self.speak("Your reminder is set!")
+            time.sleep(int(''.join(digits)) * 60)
+            self.play_mp3(timer_file_path)
+            self.speak("Hello! Your timer is done!")
+        else:
+            self.speak("Uh oh, it seems you didn't type any numbers! Try again.")
+
+    def print_current_datetime(self):
+        current_datetime = datetime.now()
+        formatted_datetime = current_datetime.strftime("%H:%M")
+        self.speak(f"The time is {formatted_datetime}!")
+
+    def change_sprite(self, new_sprite):
+        try:
+            self.panel.config(image=new_sprite)
+        except Exception:
+            pass
+
+    def play_mp3(self, file_path):
+        try:
+            pygame.mixer.init()
+            pygame.mixer.music.load(file_path)
+            pygame.mixer.music.play()
+        except Exception:
+            pass
+
+    # Minimal AI chat window (local echo AI). Replace with Ollama/OpenAI integration if desired.
+    def show_ai_chat_window(self):
+        win = Toplevel(self.root)
+        win.title("Ask Kinito (AI)")
+        win.geometry("400x200")
+        tk.Label(win, text="Ask me anything:").pack(pady=6)
+        entry = tk.Entry(win, width=60)
+        entry.pack(pady=6)
+        result = tk.Text(win, height=6, width=48)
+        result.pack(pady=6)
+
+        def submit():
+            prompt = entry.get().strip()
+            if not prompt:
+                return
+            # Simple local "AI" that echoes and adds a friendly reply.
+            reply = f"You asked: {prompt}\nI'm still learning — here's a helpful tip: try to be specific about what you want."
+            result.delete('1.0', tk.END)
+            result.insert(tk.END, reply)
+            self.speak(reply)
+
+        tk.Button(win, text="Send", command=submit).pack(pady=4)
+
+
+def main():
+    root = tk.Tk()
+    app = FloatingAssistant(root, sprite_path_moving)
+    root.mainloop()
+
+if __name__ == "__main__":
+    main()
