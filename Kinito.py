@@ -10,7 +10,7 @@ import time
 import math
 import pyautogui
 import subprocess
-import pygame
+# pygame removed from top-level imports to allow running without installing it
 from datetime import datetime
 
 # Helper to support PyInstaller onefile bundles
@@ -483,12 +483,29 @@ class FloatingAssistant:
             pass
 
     def play_mp3(self, file_path):
+        # Try pygame if available, otherwise use the OS default player
         try:
+            import pygame
             pygame.mixer.init()
             pygame.mixer.music.load(file_path)
             pygame.mixer.music.play()
+            return
         except Exception:
             pass
+
+        # Fallback: open the file with the system default application
+        try:
+            if sys.platform.startswith("win"):
+                os.startfile(file_path)
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", file_path])
+            else:
+                subprocess.Popen(["xdg-open", file_path])
+        except Exception:
+            try:
+                fallback_speak("Unable to play audio file.")
+            except Exception:
+                pass
 
     # Minimal AI chat window (local echo AI). Replace with Ollama/OpenAI integration if desired.
     def show_ai_chat_window(self):
